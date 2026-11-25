@@ -1,35 +1,11 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-首次配置向导：交互式收集邮箱与业务信息，生成本地配置。
-
-产出（都在用户自己的工作目录）：
-    pipeline_config.json   工作路径 / 公司名 / 域名 / 日期范围 / 词表   0600
-    <program_dir>/.env     IMAP 服务器 / 账号 / 授权码                0600
-
-安全约束
-- 授权码只在本机写入 .env，绝不打印、绝不进 config.json、绝不上传。
-- IMAP 全程只读（readonly + BODY.PEEK），不写服务器、不发邮件。
-"""
+"""自动配置邮箱商机库。"""
+import argparse
 import getpass
 import json
 import os
+import re
 import stat
-import sys
-
-DEFAULT_HOST = "imap.exmail.qq.com"
-
-
-def ask(prompt, default=""):
-    tip = " [%s]" % default if default else ""
-    v = input("%s%s: " % (prompt, tip)).strip()
-    return v if v else default
-
-
-def yes(prompt, default="y"):
-    v = input("%s [y/N]: " % prompt).strip().lower()
-    return (v or default).lower().startswith("y")
-
+from pathlib import Path
 
 def write_secret(path, kv):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -47,76 +23,65 @@ def write_json(path, data):
     print("  已写入 %s（权限 600）" % path)
 
 
-def main():
-    print("=" * 60)
-    print("邮箱商机库 · 首次配置向导")
-    print("=" * 60)
-    print("说明：所有配置只保存在你本机；授权码不会被打印或上传。\n")
+HOSTS = {
+    "qq.com": "imap.qq.com", "foxmail.com": "imap.qq.com",
+    "163.com": "imap.163.com", "126.com": "imap.126.com",
+    "gmail.com": "imap.gmail.com",
+}
 
-    ws = ask("① 工作目录（存放数据库/抽取文件/配置）", os.getcwd())
-    ws = os.path.abspath(os.path.expanduser(ws))
-    os.makedirs(ws, exist_ok=True)
 
-    print("\n--- 邮箱连接（IMAP，只读）---")
-    host = ask("  IMAP 服务器", DEFAULT_HOST)
-    port = ask("  端口（一般 993）", "993")
-    user = ask("  邮箱账号（完整地址）")
-    while not user or "@" not in user:
-        user = ask("  邮箱账号（需含 @）")
-    pwd = getpass.getpass("  授权码/密码（输入不显示）: ")
-    while not pwd:
-        pwd = getpass.getpass("  授权码不能为空，请重输: ")
+def configure(config_path, explicit_host=None):
 
-    print("\n--- 你的业务身份（用于卡片字段，可稍后改）---")
-    our_domain = user.split("@")[-1]
-    our_company = ask("  你方公司名称", our_domain.split(".")[0])
-    owner_name = ask("  负责人称呼（写进卡片的参与人）", "负责人")
-    owner_email = ask("  负责人邮箱（可留空）", user)
-
-    print("\n--- 抽取范围 ---")
-    since = ask("  起始日期（IMAP 格式，如 01-Jan-2023）", "01-Jan-2023")
-    prefix = ask("  客户归档文件夹前缀（如 其他文件夹/，没有就留空）", "其他文件夹/")
-    key_domains = ask("  重点客户域名（逗号分隔，可留空）", "")
-
-    out_name = ask("  抽取产物文件夹名", "抽取")
-    prog_name = ask("  程序/日志文件夹名", "邮件归档程序")
-    db_name = ask("  数据库文件名", "mail_index.sqlite")
-    tag = ask("  批次文件名前缀（如 m_）", "m_")
-
-    cfg = {
-        "workspace": ws,
-        "db_name": db_name,
-        "out_dir_name": out_name,
-        "program_dir_name": prog_name,
-        "tag": tag,
-        "since": since,
-        "our_domain": our_domain,
-        "our_company": our_company,
-        "owner_name": owner_name,
-        "owner_email": owner_email,
-        "customer_folder_prefix": prefix,
-        "key_customer_domains": [d.strip() for d in key_domains.split(",") if d.strip()],
-        "env_file": os.path.join(ws, prog_name, ".env"),
-        "immediate_imap_host": host,
-        "imap_port": port,
-        "_note": "本文件含业务信息，权限 600；授权码不在此文件。",
-    }
-
-    cfg_path = os.path.join(ws, "pipeline_config.json")
-    env_path = os.path.join(ws, prog_name, ".env")
-    write_json(cfg_path, cfg)
-    write_secret(env_path, {
-        "IMAP_HOST": host,
-        "IMAP_PORT": port,
-        "IMAP_USER": user,
-        "IMAP_PASSWORD": pwd,
-    })
-
-    print("\n" + "=" * 60)
-    print("配置完成！工作目录：%s" % ws)
-    print("接下来可让 WorkBuddy 开始跑第①步建索引。")
-    print("提示：授权码如变更，重跑本向导或直接编辑 .env。")
+    cfg = json.loads(config_path.read_text(encoding="utf-8-sig")) if config_path.exists() else {}
+    root = Path(cfg.get("workspace") or config_path.parent).resolve()
+    config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (root / (cfg.get("out_dir_name") or "抽取")).mkdir(parents=True, exist_ok=True)
+    program = root / cfg.get("program_dir_name", "邮件归档程序")
+    secret_path = Path(cfg.get("env_file") or program / ".env")
+    saved = {}
+    if secret_path.exists():
+        for line in secret_path.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key in ("IMAP_USER", "IMAP_HOST"):
+                saved[key] = value
+    previous = saved.get("IMAP_USER", "")
+    user = previous
+    while not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", user):
+        user = input("邮箱地址：").strip()
+    domain = user.rsplit("@", 1)[1].lower()
+    host = explicit_host or saved.get("IMAP_HOST") or HOSTS.get(domain) or cfg.get("immediate_imap_host")
+    while not host:
+        candidate = input("请填写邮箱服务商提供的 IMAP 服务器地址: ").strip()
+        if re.fullmatch(r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+", candidate):
+            host = candidate
+    print(f"连接设置 {host}:{cfg.get('imap_port', 993)}（SSL），数据目录 {root}")
+    password = ""
+    while not password:
+        password = getpass.getpass("邮箱授权码（输入隐藏）: ")
+    cfg.update(workspace=str(root), env_file=str(secret_path),
+               immediate_imap_host=host)
+    cfg.setdefault("imap_port", "993")
+    cfg.setdefault("owner_email", user)
+    cfg.setdefault("our_domain", domain)
+    write_json(config_path, cfg)
+    write_secret(str(secret_path), dict(IMAP_HOST=host, IMAP_PORT=str(cfg["imap_port"]),
+                                      IMAP_USER=user, IMAP_PASSWORD=password))
+    print("本地配置已保存。")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--host", help="更正或指定 IMAP 主机")
+    args = parser.parse_args()
+    current = Path.cwd() / "pipeline_config.json"
+    if args.workspace:
+        config = args.workspace / current.name
+    elif os.environ.get("LEADS_CONFIG"):
+        config = Path(os.environ["LEADS_CONFIG"])
+    elif current.exists():
+        config = current
+    else:
+        config = Path.home() / "email-leads-data" / current.name
+    configure(config.resolve(), args.host)
+

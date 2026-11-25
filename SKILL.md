@@ -1,7 +1,9 @@
 ---
 name: email-leads-pipeline
 description: 把一个邮箱的邮件批量整理成商机基础数据库（SQLite）+ 中文商机卡片报告。端到端六阶段：IMAP 只读抓邮件头建索引 → 线程化过滤 → 抓正文 → 导出批 → 并行派 AI 子代理抽成商机卡片 → 导入 + 出报告。当用户想把某个邮箱的历史邮件做成商机库/客户线索库/邮件基础数据整理，或提到"把我的邮箱邮件整理成数据库""从邮件抽商机""批量分析邮件找客户线索"时使用。全程 IMAP 只读、不发邮件、不发布在线链接；授权码仅本地 .env 保存。
-agent_created: true
+metadata:
+  version: '1.1'
+  agent_created: true
 ---
 
 # 邮箱商机库流水线（Email → Leads Database）
@@ -37,9 +39,8 @@ SQLite 数据库（邮件头 / 线程 / 正文 / 商机卡片）+ 中文报告�
 ## 工作流（六阶段）
 
 ### 阶段 0 · 配置向导（只在首次）
-1. 若无 `pipeline_config.json`：运行 `python3 scripts/setup.py`，交互式收集
-   工作目录、IMAP 服务器/账号/授权码、你方公司/域名/负责人、起始日期、客户文件夹前缀。
-   生成 `pipeline_config.json` + `.env`（均 600）。授权码用 `getpass` 输入，不回显。
+1. 配置或凭据缺失时，在本机终端运行 `python <skill>/scripts/setup.py`。输入邮箱和授权码；已有邮箱自动复用，服务商无法识别时才补 IMAP 主机。不要在聊天中收集授权码。
+   自动复用 LEADS_CONFIG 或当前数据目录中的配置。首次默认写入用户主目录下的 email-leads-data；可用 --workspace 指定数据目录，--host 更正服务器。后续在数据目录运行脚本，或设置 LEADS_CONFIG。可选业务字段使用默认值或保留已有设置。
 2. 运行 `python3 scripts/check_setup.py` 验证：配置齐全、只读登录成功、INBOX 可只读打开。
    全绿才继续。任何失败先修配置，勿往下走。
 
@@ -110,3 +111,4 @@ SQLite 数据库（邮件头 / 线程 / 正文 / 商机卡片）+ 中文报告�
 `our_company` / `our_domain` / `owner_name` / `owner_email` 从配置注入，替换卡片中的"我方/负责人"语义。
 如需增删信号词或字段，改 `references/抽取规格.md`、`references/字段与词表.md`、
 `scripts/verify_jsonl.py` 的 `SIGNALS_OK`，以及 `scripts/pipeline_config.py` 的 `card_fields()`，保持四处一致。
+
