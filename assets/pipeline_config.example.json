@@ -1,0 +1,18 @@
+{
+  "workspace": "/绝对路径/我的商机库工作目录",
+  "db_name": "mail_index.sqlite",
+  "out_dir_name": "抽取",
+  "program_dir_name": "邮件归档程序",
+  "tag": "m_",
+  "since": "01-Jan-2023",
+  "our_domain": "mycompany.com",
+  "our_company": "我的公司",
+  "owner_name": "负责人",
+  "owner_email": "me@mycompany.com",
+  "customer_folder_prefix": "其他文件夹/",
+  "key_customer_domains": ["example.com", "partner.net"],
+  "env_file": "/绝对路径/我的商机库工作目录/邮件归档程序/.env",
+  "immediate_imap_host": "imap.exmail.qq.com",
+  "imap_port": "993",
+  "_note": "本文件由 setup.py 生成，权限 600；授权码不在此文件，单独放 .env。"
+}
